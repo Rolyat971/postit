@@ -1,6 +1,7 @@
 <?php
 use \Psr\Http\Message\ServerRequestInterface as Request;
 use \Psr\Http\Message\ResponseInterface as Response;
+use RedBeanPHP\R;
 
 if (PHP_SAPI == 'cli-server') {
     // To help the built-in PHP dev server, check if the request was actually for
@@ -15,18 +16,8 @@ require __DIR__ . '/../vendor/autoload.php';
 
 session_start();
 
-function getDB()
-{
-    $dbhost = "mysql";
-    $dbuser = "root";
-    $dbpass = "password";
-    $dbname = "artev";
-
-    $mysql_conn_string = "mysql:host=$dbhost;dbname=$dbname";
-    $dbConnection = new PDO($mysql_conn_string, $dbuser, $dbpass);
-    $dbConnection->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
-    return $dbConnection;
-}
+R::setup('mysql:host=mysql;dbname=artev','root','password');
+R::freeze(true);
 
 // Instantiate the app
 $settings = require __DIR__ . '/../src/settings.php';
@@ -40,24 +31,17 @@ $app->get('/api/v1/', function (Request $request, Response $response) {
 
 $app->get('/api/v1/postits', function (Request $request, Response $response) {
     try{
-        $db = getDB();
+        $postits = R::find('postit');
 
-        $sth = $db->prepare('SELECT * FROM postit');
-        $sth->execute();
-
-        $postits = $sth->fetch(PDO::FETCH_OBJ);
-        $sth->closeCursor();
+        $response->withStatus(200);
+        $response->withAddedHeader('Content-Type', 'application/json');
 
         if($postits){
-            $response->withStatus(200);
-            $response->withAddedHeader('Content-Type', 'application/json');
-            $response->getBody()->write(json_encode($postits));
+            $response->getBody()->write(json_encode(R::exportAll($postits)));
         }else{
-            $response->withStatus(200);
-            $response->withAddedHeader('Content-Type', 'application/json');
             $response->getBody()->write(json_encode('No Post-it'));
         }
-    }catch(PDOException $e){;
+    }catch(ResourceNotFoundException $e){;
         $response->withStatus(404);
         $response->getBody()->write('{"error":{"text":'. $e->getMessage() .'}}');
     }
@@ -68,25 +52,42 @@ $app->get('/api/v1/postits', function (Request $request, Response $response) {
 
 $app->get('/api/v1/postits/{id}', function (Request $request, Response $response, $args) {
     try{
-        $db = getDB();
-
-        $sth = $db->prepare('SELECT * FROM postit WHERE id = :id');
-        $sth->bindParam(':id', $args['id']);
-        $sth->execute();
-
-        $postits = $sth->fetch(PDO::FETCH_OBJ);
-        $sth->closeCursor();
+        $postits = R::findOne('postit', 'id=?', array($args['id']));
 
         if($postits){
             $response->withStatus(200);
             $response->withAddedHeader('Content-Type', 'application/json');
-            $response->getBody()->write(json_encode($postits));
+            $response->getBody()->write(json_encode(R::exportAll($postits)));
         }else{
             $response->withStatus(200);
             $response->withAddedHeader('Content-Type', 'application/json');
             $response->getBody()->write(json_encode('No Post-it'));
         }
-    }catch(PDOException $e){;
+    }catch(ResourceNotFoundException $e){;
+        $response->withStatus(404);
+        $response->getBody()->write('{"error":{"text":'. $e->getMessage() .'}}');
+    }
+
+
+    return $response;
+});
+
+$app->post('/api/v1/postits', function (Request $request, Response $response, $args) {
+    try{
+        $input = $request->getParsedBody();
+
+        $postit = R::dispense('postit');
+        $postit->title = (string)$input['title'];
+        $postit->content = (string)$input['content'];
+        $postit->color = (int)$input['color'];
+        $id = R::store($postit);
+
+        if($id){
+            $response->withStatus(200);
+            $response->withAddedHeader('Content-Type', 'application/json');
+            $response->getBody()->write(json_encode(R::exportAll($postit)));
+        }
+    }catch(ResourceNotFoundException $e){;
         $response->withStatus(404);
         $response->getBody()->write('{"error":{"text":'. $e->getMessage() .'}}');
     }
@@ -97,31 +98,38 @@ $app->get('/api/v1/postits/{id}', function (Request $request, Response $response
 
 $app->put('/api/v1/postits/{id}', function (Request $request, Response $response, $args) {
     try{
-        $db = getDB();
+        $input = $request->getParsedBody();
 
-        $sth = $db->prepare('UPDATE postit
-                        SET title = :title
-                        WHERE id = :id');
-        $sth->bindParam(':id', $args['id']);
+        $postit = R::findOne('postit', 'id=?', array($args['id']));
 
-        $body = $request->getBody();
-        $input = json_decode($body);
+        if($postit){
+            $postit->title = (string)$input['title'];
+            $postit->content = (string)$input['content'];
+            $postit->color = (int)$input['color'];
+            R::store($postit);
 
-        $sth->execute();
-
-        $postits = $sth->fetch(PDO::FETCH_OBJ);
-        //$sth->closeCursor();
-
-        if($postits){
             $response->withStatus(200);
             $response->withAddedHeader('Content-Type', 'application/json');
-            $response->getBody()->write(json_encode($postits));
-        }else{
-            $response->withStatus(200);
-            $response->withAddedHeader('Content-Type', 'application/json');
-            $response->getBody()->write(json_encode('No Post-it'));
+            $response->getBody()->write(json_encode(R::exportAll($postit)));
         }
-    }catch(PDOException $e){;
+    }catch(ResourceNotFoundException $e){;
+        $response->withStatus(404);
+        $response->getBody()->write('{"error":{"text":'. $e->getMessage() .'}}');
+    }
+
+
+    return $response;
+});
+
+$app->delete('/api/v1/postits/{id}', function (Request $request, Response $response, $args) {
+    try{
+        $postit = R::findOne('postit', 'id=?', array($args['id']));
+
+        if($postit){
+            R::trash($postit);
+            $response->withStatus(204);
+        }
+    }catch(ResourceNotFoundException $e){;
         $response->withStatus(404);
         $response->getBody()->write('{"error":{"text":'. $e->getMessage() .'}}');
     }
